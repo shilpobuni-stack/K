@@ -1,4 +1,5 @@
 import supabase from './db-client.js';
+import { requireMerchant } from './_auth.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -17,10 +18,8 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'PUT') {
-      const token = req.headers.authorization?.replace('Bearer ', '');
-      if (!token) return res.status(401).json({ error: 'Unauthorized' });
-      const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
-      if (authErr || !user) return res.status(401).json({ error: 'Invalid token' });
+      const user = await requireMerchant(req, res);
+      if (!user) return;
 
       const body = req.body || {};
       if (!body.id || !body.name) return res.status(400).json({ error: 'id ও name প্রয়োজন' });
@@ -41,10 +40,8 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'DELETE') {
-      const token = req.headers.authorization?.replace('Bearer ', '');
-      if (!token) return res.status(401).json({ error: 'Unauthorized' });
-      const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
-      if (authErr || !user) return res.status(401).json({ error: 'Invalid token' });
+      const user = await requireMerchant(req, res);
+      if (!user) return;
 
       const { id } = req.body || {};
       if (!id) return res.status(400).json({ error: 'id প্রয়োজন' });

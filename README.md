@@ -1,5 +1,16 @@
 # React + TypeScript + Vite
 
+## Environment variables
+
+Do not commit secrets. Set these in **Vercel Dashboard → Settings → Environment Variables** (see `.env.example` for names only):
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+- `VITE_GOOGLE_CLIENT_ID`
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

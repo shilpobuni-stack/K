@@ -1,4 +1,5 @@
 import supabase from './db-client.js';
+import { requireMerchant } from './_auth.js';
 
 function calcDelivery(settings, weight, region, subtotal) {
   const freeThreshold = Number(settings.free_threshold ?? settings.freeThreshold ?? 0);
@@ -51,10 +52,8 @@ export default async function handler(req, res) {
       const { ids, all, search } = req.query || {};
 
       if (all === '1' || all === 'true') {
-        const token = req.headers.authorization?.replace('Bearer ', '');
-        if (!token) return res.status(401).json({ error: 'Unauthorized' });
-        const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
-        if (authErr || !user) return res.status(401).json({ error: 'Invalid token' });
+        const user = await requireMerchant(req, res);
+        if (!user) return;
 
         const { data, error } = await supabase
           .from('orders')
@@ -67,10 +66,20 @@ export default async function handler(req, res) {
       if (search) {
         const q = String(search).trim();
         if (!q) return res.status(200).json([]);
+        const digits = q.replace(/\D/g, '');
+        // Full phone: at least 8 digits, query is digits only (optional spaces/dashes stripped for check)
+        const isFullPhone = digits.length >= 8 && q.replace(/[\s\-]/g, '') === digits;
+        // Full order id format (genOrderId: KS-<base36>-<4chars>)
+        const isFullOrderId = /^KS-[A-Z0-9]+-[A-Z0-9]+$/i.test(q);
+        if (!isFullPhone && !isFullOrderId) {
+          return res.status(200).json([]);
+        }
+        const column = isFullOrderId ? 'id' : 'phone';
+        const value = isFullOrderId ? q.toUpperCase() : digits;
         const { data, error } = await supabase
           .from('orders')
           .select('*')
-          .or(`id.ilike.%${q}%,phone.ilike.%${q}%`)
+          .eq(column, value)
           .order('created_at', { ascending: false })
           .limit(30);
         if (error) throw error;
@@ -167,17 +176,49 @@ export default async function handler(req, res) {
         subtotal += price * qty;
         weight += w * qty;
 
-        // Decrement stock
+        // Decrement stock (optimistic CAS to reduce oversell race)
         if (shades.length && shade) {
-          const newShades = shades.map((s) =>
-            s.id === shade.id ? { ...s, stock: Math.max(0, Number(s.stock || 0) - qty) } : s
-          );
-          await supabase.from('products').update({ shades: newShades, stock: 0 }).eq('id', product.id);
-        } else {
-          await supabase
+          // TODO(future): shades live in jsonb — use a Postgres RPC for fully atomic shade stock deduction under concurrent orders.
+          const { data: fresh, error: freshErr } = await supabase
             .from('products')
-            .update({ stock: Math.max(0, stock - qty) })
-            .eq('id', product.id);
+            .select('shades')
+            .eq('id', product.id)
+            .single();
+          if (freshErr) throw freshErr;
+          const freshShades = Array.isArray(fresh?.shades) ? fresh.shades : [];
+          const freshShade = freshShades.find((s) => s.id === shade.id);
+          const freshStock = Number(freshShade?.stock || 0);
+          if (!freshShade || freshStock < qty) {
+            return res.status(400).json({
+              error: `${product.name}${shade ? ' · ' + shade.name : ''} স্টকে নেই`,
+            });
+          }
+          const newShades = freshShades.map((s) =>
+            s.id === shade.id ? { ...s, stock: freshStock - qty } : s
+          );
+          const { data: cas, error: casErr } = await supabase
+            .from('products')
+            .update({ shades: newShades, stock: 0 })
+            .eq('id', product.id)
+            .select('id');
+          if (casErr) throw casErr;
+          if (!cas?.length) {
+            return res.status(400).json({ error: 'স্টক আপডেট ব্যর্থ — আবার চেষ্টা করুন' });
+          }
+        } else {
+          const { data: cas, error: casErr } = await supabase
+            .from('products')
+            .update({ stock: stock - qty })
+            .eq('id', product.id)
+            .eq('stock', stock)
+            .gte('stock', qty)
+            .select('id');
+          if (casErr) throw casErr;
+          if (!cas?.length) {
+            return res.status(400).json({
+              error: `${product.name} স্টকে নেই`,
+            });
+          }
         }
       }
 
@@ -237,10 +278,8 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'PUT') {
-      const token = req.headers.authorization?.replace('Bearer ', '');
-      if (!token) return res.status(401).json({ error: 'Unauthorized' });
-      const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
-      if (authErr || !user) return res.status(401).json({ error: 'Invalid token' });
+      const user = await requireMerchant(req, res);
+      if (!user) return;
 
       const { id, status, note } = req.body || {};
       if (!id) return res.status(400).json({ error: 'id প্রয়োজন' });

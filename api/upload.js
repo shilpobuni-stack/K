@@ -1,4 +1,5 @@
 import supabase from './db-client.js';
+import { requireMerchant } from './_auth.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -11,14 +12,18 @@ export default async function handler(req, res) {
   }
 
   try {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    if (!token) return res.status(401).json({ error: 'Unauthorized' });
-    const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
-    if (authErr || !user) return res.status(401).json({ error: 'Invalid token' });
+    const user = await requireMerchant(req, res);
+    if (!user) return;
 
     const { fileName, fileBase64, contentType } = req.body || {};
     if (!fileName || !fileBase64) {
       return res.status(400).json({ error: 'fileName ও fileBase64 প্রয়োজন' });
+    }
+
+    const allowedExt = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
+    const ext = String(fileName).split('.').pop()?.toLowerCase() || '';
+    if (!allowedExt.includes(ext)) {
+      return res.status(400).json({ error: 'শুধু jpg, jpeg, png, webp, gif অনুমোদিত' });
     }
 
     const buffer = Buffer.from(fileBase64, 'base64');
